@@ -1,4 +1,6 @@
 import os
+import sys
+
 from dotenv import load_dotenv
 load_dotenv()
 import gradio as gr
@@ -14,14 +16,6 @@ import numpy as np
 import argparse
 import inspect
 
-from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
-from transformers import pipeline, BlipProcessor, BlipForConditionalGeneration, BlipForQuestionAnswering
-from transformers import AutoImageProcessor, UperNetForSemanticSegmentation
-
-from diffusers import StableDiffusionPipeline, StableDiffusionInpaintPipeline, StableDiffusionInstructPix2PixPipeline
-from diffusers import EulerAncestralDiscreteScheduler
-from diffusers import StableDiffusionControlNetPipeline, ControlNetModel, UniPCMultistepScheduler
-from controlnet_aux import OpenposeDetector, MLSDdetector, HEDdetector
 
 from langchain.agents.initialize import initialize_agent
 from langchain.agents.tools import Tool
@@ -187,8 +181,6 @@ class MaskFormer:
     def __init__(self, device):
         print(f"Initializing MaskFormer to {device}")
         self.device = device
-        self.processor = CLIPSegProcessor.from_pretrained("CIDAS/clipseg-rd64-refined")
-        self.model = CLIPSegForImageSegmentation.from_pretrained("CIDAS/clipseg-rd64-refined").to(device)
 
     def inference(self, image_path, text):
         threshold = 0.5
@@ -220,8 +212,6 @@ class ImageEditing:
         self.mask_former = MaskFormer(device=self.device)
         self.revision = 'fp16' if 'cuda' in device else None
         self.torch_dtype = torch.float16 if 'cuda' in device else torch.float32
-        self.inpaint = StableDiffusionInpaintPipeline.from_pretrained(
-            "runwayml/stable-diffusion-inpainting", revision=self.revision, torch_dtype=self.torch_dtype).to(device)
 
     @prompts(name="Remove Something From The Photo",
              description="useful when you want to remove and object or something from the photo "
@@ -258,10 +248,6 @@ class InstructPix2Pix:
         print(f"Initializing InstructPix2Pix to {device}")
         self.device = device
         self.torch_dtype = torch.float16 if 'cuda' in device else torch.float32
-        self.pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained("timbrooks/instruct-pix2pix",
-                                                                           safety_checker=None,
-                                                                           torch_dtype=self.torch_dtype).to(device)
-        self.pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(self.pipe.scheduler.config)
 
     @prompts(name="Instruct Image Using Text",
              description="useful when you want to the style of the image to be like the text. "
@@ -286,9 +272,6 @@ class Text2Image:
         print(f"Initializing Text2Image to {device}")
         self.device = device
         self.torch_dtype = torch.float16 if 'cuda' in device else torch.float32
-        self.pipe = StableDiffusionPipeline.from_pretrained("runwayml/stable-diffusion-v1-5",
-                                                            torch_dtype=self.torch_dtype)
-        self.pipe.to(device)
         self.a_prompt = 'best quality, extremely detailed'
         self.n_prompt = 'longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, ' \
                         'fewer digits, cropped, worst quality, low quality'
@@ -312,9 +295,6 @@ class ImageCaptioning:
         print(f"Initializing ImageCaptioning to {device}")
         self.device = device
         self.torch_dtype = torch.float16 if 'cuda' in device else torch.float32
-        self.processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
-        self.model = BlipForConditionalGeneration.from_pretrained(
-            "Salesforce/blip-image-captioning-base", torch_dtype=self.torch_dtype).to(self.device)
 
     @prompts(name="Get Photo Description",
              description="useful when you want to know what is inside the photo. receives image_path as input. "
@@ -355,13 +335,6 @@ class CannyText2Image:
     def __init__(self, device):
         print(f"Initializing CannyText2Image to {device}")
         self.torch_dtype = torch.float16 if 'cuda' in device else torch.float32
-        self.controlnet = ControlNetModel.from_pretrained("fusing/stable-diffusion-v1-5-controlnet-canny",
-                                                          torch_dtype=self.torch_dtype)
-        self.pipe = StableDiffusionControlNetPipeline.from_pretrained(
-            "runwayml/stable-diffusion-v1-5", controlnet=self.controlnet, safety_checker=None,
-            torch_dtype=self.torch_dtype)
-        self.pipe.scheduler = UniPCMultistepScheduler.from_config(self.pipe.scheduler.config)
-        self.pipe.to(device)
         self.seed = -1
         self.a_prompt = 'best quality, extremely detailed'
         self.n_prompt = 'longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, ' \
@@ -391,7 +364,6 @@ class CannyText2Image:
 class Image2Line:
     def __init__(self, device):
         print("Initializing Image2Line")
-        self.detector = MLSDdetector.from_pretrained('lllyasviel/ControlNet')
 
     @prompts(name="Line Detection On Image",
              description="useful when you want to detect the straight line of the image. "
@@ -411,14 +383,6 @@ class LineText2Image:
     def __init__(self, device):
         print(f"Initializing LineText2Image to {device}")
         self.torch_dtype = torch.float16 if 'cuda' in device else torch.float32
-        self.controlnet = ControlNetModel.from_pretrained("fusing/stable-diffusion-v1-5-controlnet-mlsd",
-                                                          torch_dtype=self.torch_dtype)
-        self.pipe = StableDiffusionControlNetPipeline.from_pretrained(
-            "runwayml/stable-diffusion-v1-5", controlnet=self.controlnet, safety_checker=None,
-            torch_dtype=self.torch_dtype
-        )
-        self.pipe.scheduler = UniPCMultistepScheduler.from_config(self.pipe.scheduler.config)
-        self.pipe.to(device)
         self.seed = -1
         self.a_prompt = 'best quality, extremely detailed'
         self.n_prompt = 'longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, ' \
@@ -449,7 +413,6 @@ class LineText2Image:
 class Image2Hed:
     def __init__(self, device):
         print("Initializing Image2Hed")
-        self.detector = HEDdetector.from_pretrained('lllyasviel/ControlNet')
 
     @prompts(name="Hed Detection On Image",
              description="useful when you want to detect the soft hed boundary of the image. "
@@ -469,14 +432,6 @@ class HedText2Image:
     def __init__(self, device):
         print(f"Initializing HedText2Image to {device}")
         self.torch_dtype = torch.float16 if 'cuda' in device else torch.float32
-        self.controlnet = ControlNetModel.from_pretrained("fusing/stable-diffusion-v1-5-controlnet-hed",
-                                                          torch_dtype=self.torch_dtype)
-        self.pipe = StableDiffusionControlNetPipeline.from_pretrained(
-            "runwayml/stable-diffusion-v1-5", controlnet=self.controlnet, safety_checker=None,
-            torch_dtype=self.torch_dtype
-        )
-        self.pipe.scheduler = UniPCMultistepScheduler.from_config(self.pipe.scheduler.config)
-        self.pipe.to(device)
         self.seed = -1
         self.a_prompt = 'best quality, extremely detailed'
         self.n_prompt = 'longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, ' \
@@ -507,7 +462,6 @@ class HedText2Image:
 class Image2Scribble:
     def __init__(self, device):
         print("Initializing Image2Scribble")
-        self.detector = HEDdetector.from_pretrained('lllyasviel/ControlNet')
 
     @prompts(name="Sketch Detection On Image",
              description="useful when you want to generate a scribble of the image. "
@@ -527,14 +481,6 @@ class ScribbleText2Image:
     def __init__(self, device):
         print(f"Initializing ScribbleText2Image to {device}")
         self.torch_dtype = torch.float16 if 'cuda' in device else torch.float32
-        self.controlnet = ControlNetModel.from_pretrained("fusing/stable-diffusion-v1-5-controlnet-scribble",
-                                                          torch_dtype=self.torch_dtype)
-        self.pipe = StableDiffusionControlNetPipeline.from_pretrained(
-            "runwayml/stable-diffusion-v1-5", controlnet=self.controlnet, safety_checker=None,
-            torch_dtype=self.torch_dtype
-        )
-        self.pipe.scheduler = UniPCMultistepScheduler.from_config(self.pipe.scheduler.config)
-        self.pipe.to(device)
         self.seed = -1
         self.a_prompt = 'best quality, extremely detailed'
         self.n_prompt = 'longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit, ' \
@@ -563,7 +509,6 @@ class ScribbleText2Image:
 class Image2Pose:
     def __init__(self, device):
         print("Initializing Image2Pose")
-        self.detector = OpenposeDetector.from_pretrained('lllyasviel/ControlNet')
 
     @prompts(name="Pose Detection On Image",
              description="useful when you want to detect the human pose of the image. "
@@ -582,13 +527,6 @@ class PoseText2Image:
     def __init__(self, device):
         print(f"Initializing PoseText2Image to {device}")
         self.torch_dtype = torch.float16 if 'cuda' in device else torch.float32
-        self.controlnet = ControlNetModel.from_pretrained("fusing/stable-diffusion-v1-5-controlnet-openpose",
-                                                          torch_dtype=self.torch_dtype)
-        self.pipe = StableDiffusionControlNetPipeline.from_pretrained(
-            "runwayml/stable-diffusion-v1-5", controlnet=self.controlnet, safety_checker=None,
-            torch_dtype=self.torch_dtype)
-        self.pipe.scheduler = UniPCMultistepScheduler.from_config(self.pipe.scheduler.config)
-        self.pipe.to(device)
         self.num_inference_steps = 20
         self.seed = -1
         self.unconditional_guidance_scale = 9.0
@@ -621,8 +559,6 @@ class PoseText2Image:
 class Image2Seg:
     def __init__(self, device):
         print("Initializing Image2Seg")
-        self.image_processor = AutoImageProcessor.from_pretrained("openmmlab/upernet-convnext-small")
-        self.image_segmentor = UperNetForSemanticSegmentation.from_pretrained("openmmlab/upernet-convnext-small")
         self.ade_palette = [[120, 120, 120], [180, 120, 120], [6, 230, 230], [80, 50, 50],
                             [4, 200, 3], [120, 120, 80], [140, 140, 140], [204, 5, 255],
                             [230, 230, 230], [4, 250, 7], [224, 5, 255], [235, 255, 7],
@@ -689,13 +625,6 @@ class SegText2Image:
     def __init__(self, device):
         print(f"Initializing SegText2Image to {device}")
         self.torch_dtype = torch.float16 if 'cuda' in device else torch.float32
-        self.controlnet = ControlNetModel.from_pretrained("fusing/stable-diffusion-v1-5-controlnet-seg",
-                                                          torch_dtype=self.torch_dtype)
-        self.pipe = StableDiffusionControlNetPipeline.from_pretrained(
-            "runwayml/stable-diffusion-v1-5", controlnet=self.controlnet, safety_checker=None,
-            torch_dtype=self.torch_dtype)
-        self.pipe.scheduler = UniPCMultistepScheduler.from_config(self.pipe.scheduler.config)
-        self.pipe.to(device)
         self.seed = -1
         self.a_prompt = 'best quality, extremely detailed'
         self.n_prompt = 'longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit,' \
@@ -725,7 +654,6 @@ class SegText2Image:
 class Image2Depth:
     def __init__(self, device):
         print("Initializing Image2Depth")
-        self.depth_estimator = pipeline('depth-estimation')
 
     @prompts(name="Predict Depth On Image",
              description="useful when you want to detect depth of the image. like: generate the depth from this image, "
@@ -748,13 +676,6 @@ class DepthText2Image:
     def __init__(self, device):
         print(f"Initializing DepthText2Image to {device}")
         self.torch_dtype = torch.float16 if 'cuda' in device else torch.float32
-        self.controlnet = ControlNetModel.from_pretrained(
-            "fusing/stable-diffusion-v1-5-controlnet-depth", torch_dtype=self.torch_dtype)
-        self.pipe = StableDiffusionControlNetPipeline.from_pretrained(
-            "runwayml/stable-diffusion-v1-5", controlnet=self.controlnet, safety_checker=None,
-            torch_dtype=self.torch_dtype)
-        self.pipe.scheduler = UniPCMultistepScheduler.from_config(self.pipe.scheduler.config)
-        self.pipe.to(device)
         self.seed = -1
         self.a_prompt = 'best quality, extremely detailed'
         self.n_prompt = 'longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit,' \
@@ -784,7 +705,6 @@ class DepthText2Image:
 class Image2Normal:
     def __init__(self, device):
         print("Initializing Image2Normal")
-        self.depth_estimator = pipeline("depth-estimation", model="Intel/dpt-hybrid-midas")
         self.bg_threhold = 0.4
 
     @prompts(name="Predict Normal Map On Image",
@@ -819,13 +739,6 @@ class NormalText2Image:
     def __init__(self, device):
         print(f"Initializing NormalText2Image to {device}")
         self.torch_dtype = torch.float16 if 'cuda' in device else torch.float32
-        self.controlnet = ControlNetModel.from_pretrained(
-            "fusing/stable-diffusion-v1-5-controlnet-normal", torch_dtype=self.torch_dtype)
-        self.pipe = StableDiffusionControlNetPipeline.from_pretrained(
-            "runwayml/stable-diffusion-v1-5", controlnet=self.controlnet, safety_checker=None,
-            torch_dtype=self.torch_dtype)
-        self.pipe.scheduler = UniPCMultistepScheduler.from_config(self.pipe.scheduler.config)
-        self.pipe.to(device)
         self.seed = -1
         self.a_prompt = 'best quality, extremely detailed'
         self.n_prompt = 'longbody, lowres, bad anatomy, bad hands, missing fingers, extra digit,' \
@@ -857,9 +770,6 @@ class VisualQuestionAnswering:
         print(f"Initializing VisualQuestionAnswering to {device}")
         self.torch_dtype = torch.float16 if 'cuda' in device else torch.float32
         self.device = device
-        self.processor = BlipProcessor.from_pretrained("Salesforce/blip-vqa-base")
-        self.model = BlipForQuestionAnswering.from_pretrained(
-            "Salesforce/blip-vqa-base", torch_dtype=self.torch_dtype).to(self.device)
 
     @prompts(name="Answer Question About The Image",
              description="useful when you need an answer for a question based on an image. "
@@ -1047,10 +957,16 @@ class ConversationBot:
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--load', type=str, default="ImageCaptioning_cuda:0,Text2Image_cuda:0")
-    args = parser.parse_args()
-    load_dict = {e.split('_')[0].strip(): e.split('_')[1].strip() for e in args.load.split(',')}
+    args_load='''
+    ImageCaptioning_cuda:0,ImageEditing_cuda:4,
+    Text2Image_cuda: 1, Image2Canny_cpu, CannyText2Image_cuda: 0,
+    Image2Depth_cpu, DepthText2Image_cuda: 5, VisualQuestionAnswering_cuda: 2,
+    InstructPix2Pix_cuda: 2, Image2Scribble_cpu, ScribbleText2Image_cuda: 2,
+    Image2Seg_cpu, SegText2Image_cuda: 6, Image2Pose_cpu, PoseText2Image_cuda: 6,
+    Image2Hed_cpu, HedText2Image_cuda: 3, Image2Normal_cpu,
+    NormalText2Image_cuda: 3, Image2Line_cpu, LineText2Image_cuda: 7
+    '''
+    load_dict = {e.split('_')[0].strip(): e.split('_')[1].strip() for e in args_load.split(',')}
     bot = ConversationBot(load_dict=load_dict)
     with gr.Blocks(css="#chatbot .overflow-y-auto{height:500px}") as demo:
         chatbot = gr.Chatbot(elem_id="chatbot", label="Visual ChatGPT")
